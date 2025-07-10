@@ -1,6 +1,8 @@
 package model
 
 import (
+	"sort"
+
 	"github.com/fakeyanss/jt808-server-go/internal/codec/hex"
 )
 
@@ -15,6 +17,8 @@ type Msg0200 struct {
 	Speed      uint16     `json:"speed"`      // 速度，单位为0.1公里每小时(1/10km/h)
 	Direction  uint16     `json:"direction"`  // 方向，0-359，正北为 0，顺时针
 	Time       string     `json:"time"`       // YY-MM-DD-hh-mm-ss(GMT+8 时间)
+
+	AttachData map[byte][]byte // Key: 附加信息ID, Value: 数据内容
 }
 
 func (m *Msg0200) Decode(packet *PacketData) error {
@@ -28,6 +32,19 @@ func (m *Msg0200) Decode(packet *PacketData) error {
 	m.Speed = hex.ReadWord(pkt, &idx)
 	m.Direction = hex.ReadWord(pkt, &idx)
 	m.Time = hex.ReadBCD(pkt, &idx, 6)
+
+	// 解析附加数据（TLV格式）
+	m.AttachData = make(map[byte][]byte)
+	for idx < len(pkt) {
+		attachID := pkt[idx] // 附加信息ID
+		idx++
+		length := int(pkt[idx]) // 数据长度
+		idx++
+		value := pkt[idx : idx+length]
+		m.AttachData[attachID] = value
+		idx += length
+	}
+
 	return nil
 }
 
@@ -40,6 +57,20 @@ func (m *Msg0200) Encode() (pkt []byte, err error) {
 	pkt = hex.WriteWord(pkt, m.Speed)
 	pkt = hex.WriteWord(pkt, m.Direction)
 	pkt = hex.WriteBCD(pkt, m.Time)
+
+	// 编码附加数据（按ID升序排列）
+	attachIDs := make([]byte, 0, len(m.AttachData))
+	for id := range m.AttachData {
+		attachIDs = append(attachIDs, id)
+	}
+	sort.Slice(attachIDs, func(i, j int) bool { return attachIDs[i] < attachIDs[j] })
+
+	for _, id := range attachIDs {
+		value := m.AttachData[id]
+		pkt = append(pkt, id)               // 类型
+		pkt = append(pkt, byte(len(value))) // 长度
+		pkt = append(pkt, value...)         // 值
+	}
 
 	pkt, err = writeHeader(m, pkt)
 	return pkt, err
