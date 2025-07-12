@@ -270,11 +270,6 @@ func processMsg0100(ctx context.Context, data *model.ProcessData) error {
 	cache := storage.GetDeviceCache()
 	// 校验注册逻辑
 	out := data.Outgoing.(*model.Msg8100)
-	// 车辆已被注册
-	if cache.HasPlate(in.PlateNumber) {
-		out.Result = model.ResCarAlreadyRegister
-		return nil
-	}
 	// 终端已被注册
 	if cache.HasPhone(in.Header.PhoneNumber) {
 		out.Result = model.ResDeviceAlreadyRegister

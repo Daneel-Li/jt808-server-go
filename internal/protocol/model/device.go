@@ -1,10 +1,12 @@
 package model
 
 import (
+	"fmt"
 	"net"
 	"time"
 
 	"github.com/fakeyanss/jt808-server-go/internal/codec/hex"
+	"github.com/pkg/errors"
 )
 
 type DeviceStatus int8
@@ -72,6 +74,64 @@ type DeviceGeo struct {
 	Location *Location `json:"location"`
 	Drive    *Drive    `json:"drive"`
 	Time     time.Time `json:"time"`
+
+	WifiInfos []*WifiInfo `json:"wifiInfos"` //为空可为nil
+	LBSInfos  []*LBSInfo  `json:"lbsInfos"`  //为空可为nil
+}
+
+type WifiInfo struct {
+	MAC  string `json:"mac"`
+	RSSI int8   `json:"rssi"` //信号强度
+}
+
+type WifiList []*WifiInfo
+
+type LBSInfo struct {
+	MCC    uint16 `json:"mcc"`  // 移动国家码
+	MNC    uint16 `json:"mnc"`  // 移动网络码
+	LAC    uint16 `json:"lac"`  // 位置区码
+	CellID uint32 `json:"ci"`   // 小区ID
+	RSSI   int8   `json:"rssi"` // 信号强度
+}
+
+// WIFI列表解码方法
+func (wifis *WifiList) Decode(data []byte) error {
+	if len(data) < 1 {
+		return errors.New("empty wifi data")
+	}
+
+	apCount := int(data[0])
+	if len(data) != 1+apCount*7 {
+		return fmt.Errorf("invalid wifi data length, expect %d, got %d",
+			1+apCount*7, len(data))
+	}
+
+	*wifis = make([]*WifiInfo, apCount)
+
+	for i := 0; i < apCount; i++ {
+		offset := 1 + i*7
+		apData := data[offset : offset+7]
+
+		wifi := &WifiInfo{
+			RSSI: byteToDBM(apData[0]),
+			MAC: fmt.Sprintf("%02X%02X%02X%02X%02X%02X",
+				apData[0], apData[1], apData[2],
+				apData[3], apData[4], apData[5]),
+		}
+
+		(*wifis)[i] = wifi
+	}
+
+	return nil
+}
+
+// 将十六进制字节字符串（如"26"、"5D"）转换为dBm值
+func byteToDBM(b byte) int8 {
+	unsignedByte := uint8(b)
+
+	// 线性映射公式：dBm = -90 + (unsignedByte/255)*60
+	dBm := -90.0 + (float64(unsignedByte)/255.0)*60.0
+	return int8(dBm)
 }
 
 func (dg *DeviceGeo) Decode(phone string, m *Msg0200) error {
@@ -81,6 +141,9 @@ func (dg *DeviceGeo) Decode(phone string, m *Msg0200) error {
 	dg.Geo = geoMetaInstance
 	locInstance := &Location{}
 	locInstance.Decode(m)
+	var wifis WifiList = []*WifiInfo{}
+	wifis.Decode(m.AttachData[0x54])
+	dg.WifiInfos = wifis
 	dg.Location = locInstance
 	driveInstance := &Drive{}
 	driveInstance.Decode(m)
