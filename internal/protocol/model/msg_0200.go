@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/fakeyanss/jt808-server-go/internal/codec/hex"
@@ -21,6 +23,12 @@ type Msg0200 struct {
 	AttachData map[byte][]byte // Key: 附加信息ID, Value: 数据内容
 }
 
+var validAttachIDs = map[byte]bool{
+	0x01: true, 0x04: true, 0x05: true,
+	0x30: true, 0x31: true, 0x2B: true,
+	0x54: true, 0x5D: true,
+}
+
 func (m *Msg0200) Decode(packet *PacketData) error {
 	m.Header = packet.Header
 	pkt, idx := packet.Body, 0
@@ -36,8 +44,17 @@ func (m *Msg0200) Decode(packet *PacketData) error {
 	// 解析附加数据（TLV格式）
 	m.AttachData = make(map[byte][]byte)
 	for idx < len(pkt) {
+		// 检查剩余长度是否足够读取ID和Length
+		if len(pkt[idx:]) < 2 {
+			break
+		}
 		attachID := pkt[idx] // 附加信息ID
 		idx++
+		// 验证ID合法性
+		if !validAttachIDs[attachID] {
+			slog.Error(fmt.Sprintf("invalid attach ID: 0x%02X", attachID))
+			break
+		}
 		length := int(pkt[idx]) // 数据长度
 		idx++
 		value := pkt[idx : idx+length]

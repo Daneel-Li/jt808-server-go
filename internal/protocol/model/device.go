@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"time"
@@ -77,6 +78,14 @@ type DeviceGeo struct {
 
 	WifiInfos []*WifiInfo `json:"wifiInfos"` //为空可为nil
 	LBSInfos  []*LBSInfo  `json:"lbsInfos"`  //为空可为nil
+	Battery   *Battery    `json:"battery"`   //电池信息
+	CsqLevel  int8        `json:"csq"`       // 信号强度(百分比)
+	Sattelite int8        `json:"satellite"` // 卫星数量
+}
+
+type Battery struct {
+	BatteryLevel int8 `json:"batteryLevel"` // 电池电量
+	Charging     bool `json:"charging"`     // 充电状态
 }
 
 type WifiInfo struct {
@@ -85,13 +94,25 @@ type WifiInfo struct {
 }
 
 type WifiList []*WifiInfo
+type LBSList []*LBSInfo
 
 type LBSInfo struct {
 	MCC    uint16 `json:"mcc"`  // 移动国家码
-	MNC    uint16 `json:"mnc"`  // 移动网络码
+	MNC    uint8  `json:"mnc"`  // 移动网络码
 	LAC    uint16 `json:"lac"`  // 位置区码
 	CellID uint32 `json:"ci"`   // 小区ID
 	RSSI   int8   `json:"rssi"` // 信号强度
+}
+
+func (b *Battery) Decode(data []byte) error {
+	if len(data) < 2 {
+		return errors.New("empty battery data")
+	}
+
+	b.Charging = data[0] == 1
+	b.BatteryLevel = int8(data[1])
+
+	return nil
 }
 
 // WIFI列表解码方法
@@ -125,6 +146,38 @@ func (wifis *WifiList) Decode(data []byte) error {
 	return nil
 }
 
+// LBS列表解码方法
+func (lbss *LBSList) Decode(data []byte) error {
+	if len(data) < 1 {
+		return errors.New("empty wifi data")
+	}
+
+	cellCount := int(data[0])
+	if len(data) != 1+cellCount*10 {
+		return fmt.Errorf("invalid lbs data length, expect %d, got %d",
+			1+cellCount*10, len(data))
+	}
+
+	*lbss = make([]*LBSInfo, cellCount)
+
+	for i := 0; i < cellCount; i++ {
+		offset := 1 + i*10
+		lbsData := data[offset : offset+10]
+
+		lbs := &LBSInfo{
+			MCC:    uint16(lbsData[0])<<8 | uint16(lbsData[1]),
+			MNC:    uint8(lbsData[2]),
+			LAC:    uint16(lbsData[3])<<8 | uint16(lbsData[4]),
+			CellID: uint32(binary.BigEndian.Uint32(lbsData[5:9])), //大端序
+			RSSI:   int8(lbsData[9]),
+		}
+
+		(*lbss)[i] = lbs
+	}
+
+	return nil
+}
+
 // 将十六进制字节字符串（如"26"、"5D"）转换为dBm值
 func byteToDBM(b byte) int8 {
 	unsignedByte := uint8(b)
@@ -141,14 +194,36 @@ func (dg *DeviceGeo) Decode(phone string, m *Msg0200) error {
 	dg.Geo = geoMetaInstance
 	locInstance := &Location{}
 	locInstance.Decode(m)
-	var wifis WifiList = []*WifiInfo{}
-	wifis.Decode(m.AttachData[0x54])
-	dg.WifiInfos = wifis
+
 	dg.Location = locInstance
 	driveInstance := &Drive{}
 	driveInstance.Decode(m)
 	dg.Drive = driveInstance
 	dg.Time = hex.ParseTime(m.Time)
+
+	if data, exists := m.AttachData[0x54]; exists && len(data) >= 2 { //WIFI
+		var wifis WifiList = []*WifiInfo{}
+		wifis.Decode(data)
+		dg.WifiInfos = wifis
+	}
+	if data, exists := m.AttachData[0x5D]; exists && len(data) >= 2 { //LBS
+		var LBSs LBSList = []*LBSInfo{}
+		LBSs.Decode(data)
+		dg.LBSInfos = LBSs
+	}
+
+	if data, exists := m.AttachData[0x04]; exists && len(data) >= 2 { //电量
+		dg.Battery = &Battery{}
+		dg.Battery.Decode(data)
+	}
+
+	if data, exists := m.AttachData[0x30]; exists && len(data) >= 1 { //网络信号
+		dg.CsqLevel = int8(data[0])
+	}
+	if data, exists := m.AttachData[0x31]; exists && len(data) >= 1 { //卫星数量
+		dg.Sattelite = int8(data[0])
+	}
+
 	return nil
 }
 
